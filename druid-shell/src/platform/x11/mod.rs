@@ -40,3 +40,5 @@ pub mod keycodes;
 pub mod menu;
 pub mod screen;
 pub mod window;
+
+mod xim_handler;

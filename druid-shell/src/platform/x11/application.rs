@@ -28,12 +28,14 @@ use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{ConnectionExt, CreateWindowAux, EventMask, WindowClass};
 use x11rb::protocol::Event;
 use x11rb::xcb_ffi::XCBConnection;
+use xim::x11rb::X11rbClient;
 
 use crate::application::AppHandler;
 
 use super::clipboard::Clipboard;
 use super::util;
 use super::window::Window;
+use super::xim_handler::XimHandler;
 
 #[derive(Clone)]
 pub(crate) struct Application {
@@ -44,6 +46,8 @@ pub(crate) struct Application {
     ///
     /// A display is a collection of screens.
     connection: Rc<XCBConnection>,
+    /// XIM client and handler
+    xim_context: Rc<RefCell<(X11rbClient<Rc<XCBConnection>>, XimHandler)>>,
     /// An `XCBConnection` is *technically* safe to use from other threads, but there are
     /// subtleties; see https://github.com/psychon/x11rb/blob/41ab6610f44f5041e112569684fc58cd6d690e57/src/event_loop_integration.rs.
     /// Let's just avoid the issue altogether. As far as public API is concerned, this causes
@@ -100,6 +104,13 @@ impl Application {
         // https://github.com/linebender/druid/pull/1025#discussion_r442777892
         let (conn, screen_num) = XCBConnection::connect(None)?;
         let connection = Rc::new(conn);
+        let xim_client = X11rbClient::init(
+            connection.clone(),
+            &connection.setup().roots[screen_num],
+            None,
+        )?;
+        let xim_handler = XimHandler::new();
+        let xim_context = Rc::new(RefCell::new((xim_client, xim_handler)));
         let window_id = Application::create_event_window(&connection, screen_num as i32)?;
         let state = Rc::new(RefCell::new(State {
             quitting: false,
@@ -123,6 +134,7 @@ impl Application {
 
         Ok(Application {
             connection,
+            xim_context,
             screen_num: screen_num as i32,
             window_id,
             state,
@@ -251,6 +263,24 @@ impl Application {
 
     /// Returns `Ok(true)` if we want to exit the main loop.
     fn handle_event(&self, ev: &Event) -> Result<bool, Error> {
+        {
+            let (client, handler) = &mut *borrow_mut!(self.xim_context)?;
+
+            if client.filter_event(ev, handler)? {
+                // XIM consume event
+                return Ok(false);
+            }
+
+            match ev {
+                Event::KeyPress(ev) | Event::KeyRelease(ev) => {
+                    if handler.try_forward_event(client, ev.event, ev)? {
+                        return Ok(false);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match ev {
             // NOTE: When adding handling for any of the following events,
             //       there must be a check against self.window_id

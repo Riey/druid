@@ -187,6 +187,24 @@ impl XimHandler {
         Ok(())
     }
 
+    pub fn set_preedit_spot(&mut self, client: &mut XimClient, id: u32, spot: xim::Point) -> anyhow::Result<()> {
+        let id = if let Some(id) = self.ids.get(&id) {
+            *id
+        } else {
+            return Ok(());
+        };
+
+        let attrs = client.build_ic_attributes()
+        .nested_list(AttributeName::PreeditAttributes, |b| {
+            b.push(AttributeName::SpotLocation, spot);
+        })
+        .build();
+
+        client.set_ic_values(self.im, id, attrs)?;
+
+        Ok(())
+    }
+
     /// return false when event consumed
     pub fn try_forward_event(
         &mut self,
